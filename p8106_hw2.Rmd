@@ -1,0 +1,43 @@
+---
+title: "Homework 2"
+author: "Yuki Joyama"
+date: "2024-03-11"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message=FALSE,
+  warning=FALSE
+  )
+```
+
+```{r library}
+# load libraries
+library(tidyverse)
+library(caTools) # split data
+library(caret)
+# library(tidymodels)
+# library(plotmo)
+# library(kknn)
+# library(FNN) 
+# library(pls)
+```
+
+```{r dataprep}
+# read csv files 
+df = read_csv("./College.csv") |> 
+  janitor::clean_names()
+
+# partition (training:test=80:20)
+set.seed(100)
+sample = sample.split(df$college, SplitRatio = .80)
+train = subset(df, sample == TRUE)
+test = subset(df, sample == FALSE)
+```
+
+The college data is split into train (80%) and test (20%).
+
+(a)
+
