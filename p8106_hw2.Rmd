@@ -2,7 +2,7 @@
 title: "Homework 2"
 author: "Yuki Joyama"
 date: "2024-03-11"
-output: github_document
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
@@ -22,18 +22,15 @@ library(splines)
 library(mgcv)
 library(earth)
 library(ggplot2)
-
-# library(tidymodels)
-# library(plotmo)
-# library(kknn)
-# library(FNN) 
-# library(pls)
+library(vip)
 ```
 
 ```{r dataprep}
 # read csv files 
 df = read_csv("./College.csv") |> 
-  janitor::clean_names()
+  janitor::clean_names() |> 
+  dplyr::select(-college) |> 
+  dplyr::select(outstate, everything())
 
 # partition (training:test=80:20)
 set.seed(100)
@@ -44,7 +41,7 @@ test = testing(data_split)
 
 The college data is split into train (80%) and test (20%).
 
-# a
+# (a) Smoothing Spline
 ```{r}
 # Function to fit smoothing spline model and return predicted values
 fit_spline_model <- function(df, df_value) {
@@ -114,31 +111,144 @@ p + geom_line(
 
 The selected df was `r round(fit.ss$df, 2)` and the plot of this optimal fit is shown above. 
 
-# b
+# (b) Multivariate Adaptive Regression Splines (MARS)
 ```{r cv}
 # set up 10-fold cross validation 
 ctrl <- trainControl(
   method = "cv",
-  number = 10,
-  classProbs = TRUE
+  number = 10
 )
 ```
 
 ```{r}
 set.seed(100)
 
-# model.mars <- train(
-#   x = train[, "perc_alumni"],
-#   y = train$outstate,
-#   data = train,
-#   method = "earth",
-#   tuneGrid = expand.grid(degree = 1:20, nprune = 2:20),
-#   metric = "ROC",
-#   trControl = ctrl
-# )
+# fit mars model
+model.mars <- train(
+  x = train[2:17],
+  y = train$outstate,
+  method = "earth",
+  tuneGrid = expand.grid(degree = 1:5, nprune = 2:30),
+  metric = "RMSE",
+  trControl = ctrl
+)
+
+summary(model.mars$finalModel)
+coef(model.mars$finalModel)
+
+# best tuning parameters
+model.mars$bestTune
+
+plot(model.mars)
+
+# relative variable importance
+vip(model.mars$finalModel, type = "nsubsets")
 ```
 
+The final model can be expressed as the following:  
+$\hat{y}$ = 16357.0585 + 1.2722 $\times$ h(2095 - apps) + 0.4506 $\times$ h(apps - 2095) - 3.3926 $\times$ h(1673 - accept)   
++ 0.5027 $\times$ h(accept - 1673) + 3.2937 $\times$ h(903 - enroll) - 1.6789 $\times$ h(1251 - f_undergrad)   
+- 0.7292 $\times$ h(f_undergrad - 1251) - 0.9345 $\times$ h(4980 - room_board) + 118.0087 $\times$ h(ph_d - 81)   
+- 424.6454 $\times$ h(8.3 - s_f_ratio) - 53.5431 $\times$ h(27 - perc_alumni) - 0.6097 $\times$ h(14820 - expend)  
+- 21.6454 $\times$ h(98 - grad_rate) - 219.9621 $\times$ h(grad_rate - 98)  
+where $h(.)$ is hinge function.
 
+```{r}
+# partial dependence plot of room_board, 
+p1 <- pdp::partial(model.mars, pred.var = c("perc_alumni"), grid.resolution = 10) |> 
+  autoplot()
+p2 <- pdp::partial(model.mars, pred.var = c("room_board", "accept"), grid.resolution = 10) |> 
+  pdp::plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE, screen = list(z = 20, x = -60))
 
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
 
+The above plot shows the partial dependence plot of `perc_alumni`, `room_board`, and `accept`.
+
+```{r}
+# Obtain the test error
+mars.pred <- predict(model.mars, newdata = test)
+mean((mars.pred - pull(test, "outstate"))^2) # test error
+```
+
+The test error is $4.02\times10^6$
+
+# (c) Generalized Additive Model (GAM)
+```{r gam}
+set.seed(100)
+model.gam <- train(x = train[2:17],
+                   y = train$outstate,
+                   method = "gam",
+                   metric = "RMSE",
+                   trControl = ctrl)
+
+# check the best tune
+model.gam$bestTune
+
+# check final model
+summary(model.gam$finalModel)
+```
+
+The model includes all the predictors.   
+Given the estimated degrees of freedom, I will select nonlinear terms and plot each of them. 
+
+```{r}
+# plot
+plot(model.gam$finalModel, select = 1)
+plot(model.gam$finalModel, select = 3)
+plot(model.gam$finalModel, select = 4)
+plot(model.gam$finalModel, select = 5)
+plot(model.gam$finalModel, select = 6)
+plot(model.gam$finalModel, select = 8)
+plot(model.gam$finalModel, select = 9)
+plot(model.gam$finalModel, select = 11)
+plot(model.gam$finalModel, select = 13)
+plot(model.gam$finalModel, select = 14)
+plot(model.gam$finalModel, select = 15)
+plot(model.gam$finalModel, select = 16)
+```
+
+For s(f_undergrad, 5.94), s(accept, 4.26), and s(apps, 5.04), we can see that the variances of their effects tend to increase as the corresponding predictor values increase, relative to the other covariates in the model. 
+
+```{r}
+# Obtain the test error
+gam.pred <- predict(model.gam, newdata = test)
+mean((gam.pred - pull(test, "outstate"))^2) # test error
+```
+
+The test error is $3.83\times10^6$
+
+# (d) MARS vs linear model
+```{r}
+# fit a linear model 
+set.seed(100)
+model.lm <- train(x = train[2:17],
+                   y = train$outstate,
+                   method = "lm",
+                   metric = "RMSE",
+                   trControl = ctrl)
+
+# check the model
+summary(model.lm$finalModel)
+```
+
+I used 10-fold cross validation to train the linear model including all the predictors. Now, let's compare the RMSEs between the two models using the resampling method.
+
+```{r}
+# resampling
+resamp <- resamples(
+  list(
+    MARS = model.mars,
+    LM = model.lm
+  )
+)
+
+summary(resamp)
+
+# visualize RMSEs
+bwplot(resamp, metric = "RMSE")
+```
+
+Both the plot and summary output suggest that the MARS model outperforms the linear model in predicting out-of-state tuition. Therefore, in this case, I would prefer the MARS model.     
+In general applications, I think the superiority of a MARS model over a linear model depends on various factors. A MARS model may outperform a linear model when the data exhibits nonlinear relationships. However, if the data suggests linearity and parsimony is preferred for interpretability and computational efficiency, then a linear model may be favored.
 
